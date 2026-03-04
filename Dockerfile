@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config.py .
 COPY parser.py .
 COPY bot.py .
+COPY database.py .
 
 # Запуск бота
 CMD ["python", "bot.py"]

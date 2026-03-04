@@ -20,8 +20,11 @@ INSIDE_ID = os.getenv("INSIDE_ID", "1.1")
 # Скільки днів наперед перевіряти
 DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "14"))
 
+# Тривалість послуги в хвилинах (інтервал вільного часу)
+SERVICE_DURATION = int(os.getenv("SERVICE_DURATION", "60"))
+
 # Інтервал автоматичної перевірки (в секундах), 0 = вимкнено
-AUTO_CHECK_INTERVAL = int(os.getenv("AUTO_CHECK_INTERVAL", "0"))
+AUTO_CHECK_INTERVAL = int(os.getenv("AUTO_CHECK_INTERVAL", "900"))
 
 # ID чатів для автоматичних повідомлень (через кому)
 NOTIFY_CHAT_IDS = [

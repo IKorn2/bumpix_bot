@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from config import BUMPIX_API_URL, GENERAL_ID, INSIDE_ID, DAYS_AHEAD
+from config import BUMPIX_API_URL, GENERAL_ID, INSIDE_ID, DAYS_AHEAD, SERVICE_DURATION
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def _get_free_times_static(
 
 async def fetch_schedule(
     days_ahead: int = DAYS_AHEAD,
-    need_minutes: int = 30,
+    need_minutes: int = SERVICE_DURATION,
 ) -> list[DaySchedule]:
     """
     Запитує API bumpix.net та повертає список DaySchedule на наступні `days_ahead` днів.
