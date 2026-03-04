@@ -1,0 +1,15 @@
+services:
+  bumpix-bot:
+    build: .
+    container_name: bumpix-parser-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=Europe/Kyiv
+    # Для логування
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
