@@ -19,6 +19,8 @@ COPY config.py .
 COPY parser.py .
 COPY bot.py .
 COPY database.py .
+COPY calendar_drawer.py .
+COPY test_image.py .
 
 # Запуск бота
 CMD ["python", "bot.py"]

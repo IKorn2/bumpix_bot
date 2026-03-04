@@ -25,6 +25,8 @@ from database import (
     init_db, add_subscription, remove_subscription, get_subscriptions,
     get_last_known_slots, update_last_known_slots
 )
+from calendar_drawer import get_calendar_as_image
+from aiogram.types import BotCommand, BufferedInputFile
 
 # ── Логування ────────────────────────────────────────────────────────────────
 
@@ -34,8 +36,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-
-from aiogram.types import BotCommand
 
 # ── Роутер ───────────────────────────────────────────────────────────────────
 
@@ -52,8 +52,9 @@ async def cmd_start(message: types.Message):
         "📋 <b>Доступні команди:</b>\n"
         "  /check — 🟢 Перевірити вільні слоти (тільки доступні часи)\n"
         "  /full  — 📅 Повний розклад на 14 днів (включаючи вихідні)\n"
+        "  /calendar — 🎨 Генерований календар (фото)\n"
         "  /notify — 🔔 Увімкнути/вимкнути авто-сповіщення про нові слоти\n"
-        "  /test_notify — 🔍 Тестова перевірка (яка зазвичай йде у фоні)\n"
+        #"  /test_notify — 🔍 Тестова перевірка (яка зазвичай йде у фоні)\n"
         "  /help  — ❓ Довідка\n\n"
         "Натисніть /check щоб почати!",
         parse_mode=ParseMode.HTML,
@@ -69,8 +70,9 @@ async def cmd_help(message: types.Message):
         "📋 <b>Команди:</b>\n"
         "  /check — показати дні, в яких є хоча б один вільний слот\n"
         "  /full  — показати розклад на 14 днів, включаючи заповнені дні та вихідні\n"
+        "  /calendar — згенерувати стильну картинку-календар\n"
         "  /notify — підписатися на нотифікації. Бот надішле повідомлення, як тільки з'явиться новий вільний час\n"
-        "  /test_notify — примусово запустити алгоритм виявлення нових слотів та надіслати повідомлення, якщо вони є\n\n"
+        #"  /test_notify — примусово запустити алгоритм виявлення нових слотів та надіслати повідомлення, якщо вони є\n\n"
         "🔴 — вихідний\n"
         "🟡 — все зайнято\n"
         "🟢 — є вільні слоти\n\n"
@@ -131,6 +133,27 @@ async def cmd_notify(message: types.Message):
             "Я надішлю повідомлення сюди, як тільки в системі з'явиться новий вільний час для запису.",
             parse_mode=ParseMode.HTML,
         )
+
+
+@router.message(Command("calendar"))
+async def cmd_calendar(message: types.Message):
+    wait_msg = await message.answer("⏳ Генерую стильний календар...")
+    try:
+        schedule = await fetch_schedule()
+        image_data = get_calendar_as_image(schedule)
+        
+        photo = BufferedInputFile(image_data.read(), filename="calendar.png")
+        await message.answer_photo(
+            photo=photo,
+            caption="🎨 <b>Ваш календар вільних вікон</b>\n"
+                    "Анна Карпова (WaxHubStudio)\n\n"
+                    "🔗 <a href='https://bumpix.net/uk/waxhubstudio'>Записатися онлайн</a>",
+            parse_mode=ParseMode.HTML
+        )
+        await wait_msg.delete()
+    except Exception as e:
+        logger.error("Помилка при генерації календаря: %s", e, exc_info=True)
+        await wait_msg.edit_text(f"❌ Помилка при генерації: <code>{e}</code>")
 
 
 @router.message(Command("test_notify"))
@@ -264,8 +287,9 @@ async def main():
     await bot.set_my_commands([
         BotCommand(command="check", description="🟢 Вільні слоти"),
         BotCommand(command="full", description="📅 Повний розклад"),
+        BotCommand(command="calendar", description="🎨 Календар (фото)"),
         BotCommand(command="notify", description="🔔 Авто-сповіщення"),
-        BotCommand(command="test_notify", description="🔍 Тестова перевірка"),
+        #BotCommand(command="test_notify", description="🔍 Тестова перевірка"),
         BotCommand(command="help", description="❓ Допомога"),
     ])
 
