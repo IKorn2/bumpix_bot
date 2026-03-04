@@ -1,10 +1,15 @@
 import sqlite3
 import os
 
-DB_PATH = "subscriptions.db"
+# Використовуємо абсолютний шлях або змінну оточення
+DB_DIR = os.getenv("DB_DIR", "/app/data")
+DB_PATH = os.path.join(DB_DIR, "subscriptions.db")
 
 def init_db():
     """Створює таблицю для підписок, якщо вона не існує."""
+    # Створюємо директорію, якщо вона не існує
+    os.makedirs(DB_DIR, exist_ok=True)
+    
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
