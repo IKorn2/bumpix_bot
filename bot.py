@@ -95,7 +95,18 @@ async def cmd_check(message: types.Message):
     now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
     text += f"\n\n🕐 <i>Оновлено: {now_str}</i>"
 
-    await wait_msg.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    try:
+        image_data = await get_calendar_as_image(schedule)
+        photo = BufferedInputFile(image_data.read(), filename="calendar.png")
+        await message.answer_photo(
+            photo=photo,
+            caption=text,
+            parse_mode=ParseMode.HTML
+        )
+        await wait_msg.delete()
+    except Exception as e:
+        logger.error("Помилка при генерації календаря для /check: %s", e)
+        await wait_msg.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
 @router.message(Command("full"))
@@ -112,7 +123,18 @@ async def cmd_full(message: types.Message):
     now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
     text += f"\n\n🕐 <i>Оновлено: {now_str}</i>"
 
-    await wait_msg.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    try:
+        image_data = await get_calendar_as_image(schedule)
+        photo = BufferedInputFile(image_data.read(), filename="calendar.png")
+        await message.answer_photo(
+            photo=photo,
+            caption=text,
+            parse_mode=ParseMode.HTML
+        )
+        await wait_msg.delete()
+    except Exception as e:
+        logger.error("Помилка при генерації календаря для /full: %s", e)
+        await wait_msg.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
 @router.message(Command("notify"))
@@ -140,7 +162,7 @@ async def cmd_calendar(message: types.Message):
     wait_msg = await message.answer("⏳ Генерую стильний календар...")
     try:
         schedule = await fetch_schedule()
-        image_data = get_calendar_as_image(schedule)
+        image_data = await get_calendar_as_image(schedule)
         
         photo = BufferedInputFile(image_data.read(), filename="calendar.png")
         await message.answer_photo(
@@ -192,7 +214,18 @@ async def cmd_test_notify(message: types.Message):
                 + "\n".join(new_slots_text_parts)
                 + "\n\n🔗 <a href='https://bumpix.net/uk/waxhubstudio'>Записатися</a>"
             )
-            await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            
+            try:
+                image_data = await get_calendar_as_image(schedule)
+                photo = BufferedInputFile(image_data.read(), filename="calendar.png")
+                await message.answer_photo(
+                    photo=photo,
+                    caption=text,
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception as e:
+                logger.error("Помилка при генерації календаря для /test_notify: %s", e)
+                await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         else:
             await message.answer("✅ Нових слотів відносно останньої перевірки не знайдено.")
             
@@ -255,13 +288,32 @@ async def _auto_check_loop(bot: Bot):
                 + "\n".join(new_slots_text_parts)
                 + "\n\n🔗 <a href='https://bumpix.net/uk/waxhubstudio'>Записатися</a>"
             )
+            
+            # Генеруємо картинку для авто-сповіщення
+            photo = None
+            try:
+                image_data = await get_calendar_as_image(schedule)
+                photo_bytes = image_data.read()
+            except Exception as e:
+                logger.error("Авто-перевірка: помилка генерації картинки %s", e)
+                photo_bytes = None
+
             for chat_id in list(notify_chats):
                 try:
-                    await bot.send_message(
-                        chat_id, text,
-                        parse_mode=ParseMode.HTML,
-                        disable_web_page_preview=True,
-                    )
+                    if photo_bytes:
+                        photo = BufferedInputFile(photo_bytes, filename="calendar.png")
+                        await bot.send_photo(
+                            chat_id, 
+                            photo=photo,
+                            caption=text,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    else:
+                        await bot.send_message(
+                            chat_id, text,
+                            parse_mode=ParseMode.HTML,
+                            disable_web_page_preview=True,
+                        )
                 except Exception as e:
                     logger.error("Не вдалось надіслати в чат %s: %s", chat_id, e)
 
