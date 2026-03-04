@@ -4,6 +4,7 @@ import io
 import logging
 from playwright.async_api import async_playwright
 from jinja2 import Template
+from config import LOCAL_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,7 @@ async def get_calendar_as_image(schedule) -> io.BytesIO:
     Generates a stylish modern calendar image using Playwright.
     """
     try:
-        today = datetime.datetime.now()
+        today = datetime.datetime.now(LOCAL_TZ)
         today_str = today.strftime("%d.%m.%Y")
         
         days = []
@@ -282,7 +283,7 @@ async def get_calendar_as_image(schedule) -> io.BytesIO:
         template = Template(HTML_TEMPLATE)
         html_content = template.render(
             days=days,
-            generated_at=datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+            generated_at=datetime.datetime.now(LOCAL_TZ).strftime("%d.%m.%Y %H:%M")
         )
 
         async with async_playwright() as p:

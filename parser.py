@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from config import BUMPIX_API_URL, GENERAL_ID, INSIDE_ID, DAYS_AHEAD, SERVICE_DURATION
+from config import BUMPIX_API_URL, GENERAL_ID, INSIDE_ID, DAYS_AHEAD, SERVICE_DURATION, LOCAL_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ async def fetch_schedule(
     :param need_minutes: тривалість послуги в хвилинах (впливає на доступність слотів)
     :return: список DaySchedule
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(LOCAL_TZ)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     from_ts = int(today.timestamp())

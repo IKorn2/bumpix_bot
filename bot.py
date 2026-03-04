@@ -19,7 +19,7 @@ from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
-from config import BOT_TOKEN, AUTO_CHECK_INTERVAL, NOTIFY_CHAT_IDS, DAYS_AHEAD
+from config import BOT_TOKEN, AUTO_CHECK_INTERVAL, NOTIFY_CHAT_IDS, DAYS_AHEAD, LOCAL_TZ
 from parser import fetch_schedule, format_schedule, format_schedule_short
 from database import (
     init_db, add_subscription, remove_subscription, get_subscriptions,
@@ -92,7 +92,7 @@ async def cmd_check(message: types.Message):
         logger.error("Помилка при отриманні розкладу: %s", e, exc_info=True)
         text = f"❌ Помилка при отриманні даних: <code>{e}</code>\nСпробуйте пізніше."
 
-    now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    now_str = datetime.now(LOCAL_TZ).strftime("%d.%m.%Y %H:%M")
     text += f"\n\n🕐 <i>Оновлено: {now_str}</i>"
 
     try:
@@ -120,7 +120,7 @@ async def cmd_full(message: types.Message):
         logger.error("Помилка при отриманні розкладу: %s", e, exc_info=True)
         text = f"❌ Помилка при отриманні даних: <code>{e}</code>\nСпробуйте пізніше."
 
-    now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    now_str = datetime.now(LOCAL_TZ).strftime("%d.%m.%Y %H:%M")
     text += f"\n\n🕐 <i>Оновлено: {now_str}</i>"
 
     try:
@@ -236,6 +236,80 @@ async def cmd_test_notify(message: types.Message):
 
 # ── Авто-перевірка (фоновий таск) ───────────────────────────────────────────
 
+async def perform_check(bot: Bot):
+    """Виконує одну перевірку розкладу та надсилає сповіщення при змінах."""
+    notify_chats = get_subscriptions()
+    # Також додаємо чати з конфигу (якщо вони були задані через .env)
+    for cid in NOTIFY_CHAT_IDS:
+        notify_chats.add(cid)
+
+    if not notify_chats:
+        return
+
+    try:
+        schedule = await fetch_schedule()
+    except Exception as e:
+        logger.error("Помилка під час перевірки: %s", e)
+        return
+
+    # Визначити нові слоти
+    last_known = get_last_known_slots()
+    current_slots: dict[str, set[str]] = {}
+    new_slots_text_parts: list[str] = []
+
+    for day in schedule:
+        if not day.is_working or not day.slots:
+            continue
+        slot_set = {s.time_str for s in day.slots}
+        current_slots[day.date_label] = slot_set
+
+        prev_set = last_known.get(day.date_label, set())
+        new_times = slot_set - prev_set
+        if new_times:
+            times_str = ", ".join(sorted(new_times))
+            new_slots_text_parts.append(
+                f"🆕 <b>{day.date_label}</b>: {times_str}"
+            )
+
+    update_last_known_slots(current_slots)
+
+    if new_slots_text_parts:
+        text = (
+            "🔔 <b>Нові вільні слоти!</b>\n\n"
+            + "\n".join(new_slots_text_parts)
+            + "\n\n🔗 <a href='https://bumpix.net/uk/waxhubstudio'>Записатися</a>"
+        )
+        
+        # Генеруємо картинку для авто-сповіщення
+        photo_bytes = None
+        try:
+            image_data = await get_calendar_as_image(schedule)
+            photo_bytes = image_data.read()
+        except Exception as e:
+            logger.error("Помилка генерації картинки: %s", e)
+
+        for chat_id in list(notify_chats):
+            try:
+                if photo_bytes:
+                    photo = BufferedInputFile(photo_bytes, filename="calendar.png")
+                    await bot.send_photo(
+                        chat_id, 
+                        photo=photo,
+                        caption=text,
+                        parse_mode=ParseMode.HTML,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id, text,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
+            except Exception as e:
+                logger.error("Не вдалось надіслати в чат %s: %s", chat_id, e)
+
+
+# ── Авто-перевірка (фоновий таск) ───────────────────────────────────────────
+
 async def _auto_check_loop(bot: Bot):
     """Періодично перевіряє розклад і надсилає повідомлення при змінах."""
     if AUTO_CHECK_INTERVAL <= 0:
@@ -244,78 +318,12 @@ async def _auto_check_loop(bot: Bot):
 
     logger.info("Авто-перевірка запущена. Інтервал: %s сек.", AUTO_CHECK_INTERVAL)
 
+    # Перша перевірка одразу при запуску
+    await perform_check(bot)
+
     while True:
         await asyncio.sleep(AUTO_CHECK_INTERVAL)
-
-        notify_chats = get_subscriptions()
-        # Також додаємо чати з конфигу (якщо вони були задані через .env)
-        for cid in NOTIFY_CHAT_IDS:
-            notify_chats.add(cid)
-
-        if not notify_chats:
-            continue
-
-        try:
-            schedule = await fetch_schedule()
-        except Exception as e:
-            logger.error("Авто-перевірка: помилка %s", e)
-            continue
-
-        # Визначити нові слоти
-        last_known = get_last_known_slots()
-        current_slots: dict[str, set[str]] = {}
-        new_slots_text_parts: list[str] = []
-
-        for day in schedule:
-            if not day.is_working or not day.slots:
-                continue
-            slot_set = {s.time_str for s in day.slots}
-            current_slots[day.date_label] = slot_set
-
-            prev_set = last_known.get(day.date_label, set())
-            new_times = slot_set - prev_set
-            if new_times:
-                times_str = ", ".join(sorted(new_times))
-                new_slots_text_parts.append(
-                    f"🆕 <b>{day.date_label}</b>: {times_str}"
-                )
-
-        update_last_known_slots(current_slots)
-
-        if new_slots_text_parts:
-            text = (
-                "🔔 <b>Нові вільні слоти!</b>\n\n"
-                + "\n".join(new_slots_text_parts)
-                + "\n\n🔗 <a href='https://bumpix.net/uk/waxhubstudio'>Записатися</a>"
-            )
-            
-            # Генеруємо картинку для авто-сповіщення
-            photo = None
-            try:
-                image_data = await get_calendar_as_image(schedule)
-                photo_bytes = image_data.read()
-            except Exception as e:
-                logger.error("Авто-перевірка: помилка генерації картинки %s", e)
-                photo_bytes = None
-
-            for chat_id in list(notify_chats):
-                try:
-                    if photo_bytes:
-                        photo = BufferedInputFile(photo_bytes, filename="calendar.png")
-                        await bot.send_photo(
-                            chat_id, 
-                            photo=photo,
-                            caption=text,
-                            parse_mode=ParseMode.HTML,
-                        )
-                    else:
-                        await bot.send_message(
-                            chat_id, text,
-                            parse_mode=ParseMode.HTML,
-                            disable_web_page_preview=True,
-                        )
-                except Exception as e:
-                    logger.error("Не вдалось надіслати в чат %s: %s", chat_id, e)
+        await perform_check(bot)
 
 
 # ── Запуск бота ──────────────────────────────────────────────────────────────

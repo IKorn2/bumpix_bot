@@ -30,3 +30,12 @@ AUTO_CHECK_INTERVAL = int(os.getenv("AUTO_CHECK_INTERVAL", "900"))
 NOTIFY_CHAT_IDS = [
     int(x.strip()) for x in os.getenv("NOTIFY_CHAT_IDS", "").split(",") if x.strip()
 ]
+# Часовий пояс
+TZ_NAME = os.getenv("TZ", "Europe/Kyiv")
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo(TZ_NAME)
+except ImportError:
+    # Для старих версій Python < 3.9 (хоча у нас 3.12)
+    from datetime import timezone, timedelta
+    LOCAL_TZ = timezone(timedelta(hours=2)) # Спрощено для Києва (зимовий час)
