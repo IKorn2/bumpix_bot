@@ -98,11 +98,22 @@ async def cmd_check(message: types.Message):
     try:
         image_data = await get_calendar_as_image(schedule)
         photo = BufferedInputFile(image_data.read(), filename="calendar.png")
-        await message.answer_photo(
-            photo=photo,
-            caption=text,
-            parse_mode=ParseMode.HTML
-        )
+        
+        # Обмеження Telegram на довжину caption: 1024 символи
+        if len(text) <= 1024:
+            await message.answer_photo(
+                photo=photo,
+                caption=text,
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            # Якщо текст задовгий, надсилаємо картинку окремо, а текст окремо
+            await message.answer_photo(
+                photo=photo,
+                caption="🎨 Календар вільних вікон",
+                parse_mode=ParseMode.HTML
+            )
+            await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         await wait_msg.delete()
     except Exception as e:
         logger.error("Помилка при генерації календаря для /check: %s", e)
@@ -126,11 +137,20 @@ async def cmd_full(message: types.Message):
     try:
         image_data = await get_calendar_as_image(schedule)
         photo = BufferedInputFile(image_data.read(), filename="calendar.png")
-        await message.answer_photo(
-            photo=photo,
-            caption=text,
-            parse_mode=ParseMode.HTML
-        )
+        
+        if len(text) <= 1024:
+            await message.answer_photo(
+                photo=photo,
+                caption=text,
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await message.answer_photo(
+                photo=photo,
+                caption="📅 Повний розклад",
+                parse_mode=ParseMode.HTML
+            )
+            await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         await wait_msg.delete()
     except Exception as e:
         logger.error("Помилка при генерації календаря для /full: %s", e)
@@ -292,12 +312,26 @@ async def perform_check(bot: Bot):
             try:
                 if photo_bytes:
                     photo = BufferedInputFile(photo_bytes, filename="calendar.png")
-                    await bot.send_photo(
-                        chat_id, 
-                        photo=photo,
-                        caption=text,
-                        parse_mode=ParseMode.HTML,
-                    )
+                    
+                    if len(text) <= 1024:
+                        await bot.send_photo(
+                            chat_id, 
+                            photo=photo,
+                            caption=text,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    else:
+                        await bot.send_photo(
+                            chat_id, 
+                            photo=photo,
+                            caption="🔔 Виявлено нові вільні слоти!",
+                            parse_mode=ParseMode.HTML,
+                        )
+                        await bot.send_message(
+                            chat_id, text,
+                            parse_mode=ParseMode.HTML,
+                            disable_web_page_preview=True,
+                        )
                 else:
                     await bot.send_message(
                         chat_id, text,
