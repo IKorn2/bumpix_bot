@@ -1,22 +1,5 @@
 """
 Парсер доступних слотів з bumpix.net API.
-
-API endpoint: POST /data/api/site_get_data_for_appointment
-Параметри:
-  - generalId: ID спеціаліста (378544)
-  - insideId:  внутрішній ID ("1.1")
-  - from:      початок діапазону (Unix timestamp в секундах, UTC)
-  - to:        кінець діапазону (Unix timestamp в секундах, UTC)
-  - teid:      ID трансферу (-1 за замовчуванням)
-
-Відповідь JSON:
-  - time: { "<timestamp_sec>": { "w": [startMin, endMin], "b": [[breakStart, breakEnd], ...] }, ... }
-  - events: { "<timestamp_sec>": [[evStart, evEnd], ...], ... }
-  - it:  інтервал вільного часу (хвилини), за замовчуванням 15
-  - itw: інтервал по днях тижня (dict), необов'язково
-  - sa:  статичні часи (list), необов'язково
-  - sm:  stick mode (bool), необов'язково
-  - al:  дозволити останній вільний слот (bool), необов'язково
 """
 
 import logging
@@ -80,14 +63,24 @@ def _get_free_times_normal(
         collide = _is_collide(current, current + need_minutes, events)
         if not collide:
             collide = _is_collide(current, current + need_minutes, breaks)
+        
         if not collide and current + need_minutes > end_work:
             if not allow_last:
                 collide = [0, end_work]
+        
         if not collide:
             free.append(current)
             current += interval
         else:
-            current = collide[1]  # стрибаємо за блок
+            # Стрибаємо за блок і вирівнюємо за інтервалом, щоб залишатися на сітці
+            current = collide[1]
+            passed = current - start_work
+            if passed > 0 and interval > 0:
+                remainder = passed % interval
+                if remainder > 0:
+                    current += (interval - remainder)
+            elif passed < 0:
+                current = start_work
     return free
 
 
@@ -123,17 +116,15 @@ async def fetch_schedule(
     need_minutes: int = SERVICE_DURATION,
 ) -> list[DaySchedule]:
     """
-    Запитує API bumpix.net та повертає список DaySchedule на наступні `days_ahead` днів.
-
-    :param days_ahead: кількість днів наперед для перевірки
-    :param need_minutes: тривалість послуги в хвилинах (впливає на доступність слотів)
-    :return: список DaySchedule
+    Запитує API bumpix.net та повертає список DaySchedule на наступні дні.
     """
-    now = datetime.now(LOCAL_TZ)
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Визначаємо "сьогодні" за київським часом
+    now_local = datetime.now(LOCAL_TZ)
+    # Створюємо UTC midnight для цього ж числа (як очікує Bumpix)
+    today = datetime(now_local.year, now_local.month, now_local.day, tzinfo=timezone.utc)
 
     from_ts = int(today.timestamp())
-    to_ts = int((today + timedelta(days=days_ahead + 7)).timestamp())  # берімо з запасом
+    to_ts = int((today + timedelta(days=days_ahead + 7)).timestamp())
 
     payload = {
         "generalId": GENERAL_ID,
@@ -150,28 +141,24 @@ async def fetch_schedule(
             BUMPIX_API_URL,
             data=payload,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "https://bumpix.net/uk/waxhubstudio",
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://bumpix.net/",
                 "Origin": "https://bumpix.net",
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json",
             },
         )
         resp.raise_for_status()
         data = resp.json()
 
     if not data:
-        logger.warning("API повернув порожню відповідь")
         return []
 
-    # Розбір налаштувань
     time_data: dict = data.get("time", {})
     events_data: dict = data.get("events", {})
     interval = data.get("it", 15)
     interval_week = data.get("itw")
     static_times = data.get("sa", False)
     allow_last = "al" in data
-    # stick_mode = "sm" in data  # поки не використовуємо для простоти
 
     results: list[DaySchedule] = []
 
@@ -180,112 +167,68 @@ async def fetch_schedule(
         day_ts = int(current_day.timestamp())
         day_ts_str = str(day_ts)
 
-        # Визначення дня тижня для JavaScript-сумісності (1=Mon..7=Sun -> java style: 1=Sun..7=Sat)
-        # Bumpix JS: moment.day() + 1  -> Sun=1, Mon=2, Tue=3...
-        # Python: weekday() -> Mon=0..Sun=6
-        py_wd = current_day.weekday()  # Mon=0..Sun=6
-        java_wd = (py_wd + 2) % 7      # Sun=1, Mon=2, ..., Sat=7
-        if java_wd == 0:
-            java_wd = 7
+        py_wd = current_day.weekday() 
+        java_wd = (py_wd + 2) % 7 
+        if java_wd == 0: java_wd = 7
 
-        # Визначення інтервалу для цього дня
         day_interval = interval
         if interval_week and str(java_wd) in interval_week:
             day_interval = interval_week[str(java_wd)]
 
-        # Форматування дати
         weekdays_uk = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
         date_label = f"{weekdays_uk[py_wd]}, {current_day.strftime('%d.%m.%Y')}"
 
-        # Перевірка чи день має робочий графік
         if day_ts_str not in time_data and day_ts not in time_data:
-            results.append(DaySchedule(
-                date=current_day,
-                date_label=date_label,
-                is_working=False,
-            ))
+            results.append(DaySchedule(date=current_day, date_label=date_label, is_working=False))
             continue
 
-        # Отримати дані дня (ключ може бути str або int)
         day_info = time_data.get(day_ts_str) or time_data.get(day_ts)
         if not day_info or "w" not in day_info:
-            results.append(DaySchedule(
-                date=current_day,
-                date_label=date_label,
-                is_working=False,
-            ))
+            results.append(DaySchedule(date=current_day, date_label=date_label, is_working=False))
             continue
 
         start_work = day_info["w"][0]
         end_work = day_info["w"][1]
         breaks = day_info.get("b", [])
-
-        # Отримати записи (events) на цей день
         events = events_data.get(day_ts_str) or events_data.get(str(day_ts)) or events_data.get(day_ts, [])
 
-        # Обчислити вільні слоти
         if static_times:
-            free_times = _get_free_times_static(
-                start_work, end_work, events, breaks,
-                static_times, need_minutes, allow_last,
-            )
+            free_times = _get_free_times_static(start_work, end_work, events, breaks, static_times, need_minutes, allow_last)
         else:
-            free_times = _get_free_times_normal(
-                start_work, end_work, events, breaks,
-                day_interval, need_minutes, allow_last,
-            )
+            free_times = _get_free_times_normal(start_work, end_work, events, breaks, day_interval, need_minutes, allow_last)
 
         slots = [TimeSlot(time_str=_minutes_to_time(m), minutes=m) for m in free_times]
-
-        results.append(DaySchedule(
-            date=current_day,
-            date_label=date_label,
-            is_working=True,
-            slots=slots,
-        ))
+        results.append(DaySchedule(date=current_day, date_label=date_label, is_working=True, slots=slots))
 
     return results
 
 
 def format_schedule(schedule: list[DaySchedule], compact: bool = False) -> str:
-    """
-    Форматує розклад у текстове повідомлення для Telegram.
-    """
+    """Formats the schedule into a text message."""
     if not schedule:
-        return "❌ Не вдалось отримати розклад. Спробуйте пізніше."
+        return "❌ Не вдалось отримати розклад."
 
-    lines: list[str] = []
-    lines.append("📅 <b>Розклад Анна Карпова (WaxHubStudio)</b>")
-    lines.append(f"🔗 <a href='https://bumpix.net/uk/waxhubstudio'>Записатися онлайн</a>")
-    lines.append("")
-
+    lines = ["📅 <b>Розклад Анна Карпова (WaxHubStudio)</b>", f"🔗 <a href='https://bumpix.net/uk/waxhubstudio'>Записатися онлайн</a>", ""]
     has_any_slots = False
 
     for day in schedule:
         if not day.is_working:
-            if not compact:
-                lines.append(f"🔴 <b>{day.date_label}</b> — вихідний")
+            if not compact: lines.append(f"🔴 <b>{day.date_label}</b> — вихідний")
             continue
-
         if not day.slots:
-            if not compact:
-                lines.append(f"🟡 <b>{day.date_label}</b> — немає вільних слотів")
+            if not compact: lines.append(f"🟡 <b>{day.date_label}</b> — немає вільних слотів")
             continue
-
         has_any_slots = True
         times = ", ".join(s.time_str for s in day.slots)
         lines.append(f"🟢 <b>{day.date_label}</b>")
         lines.append(f"    ⏰ {times}")
 
     if not has_any_slots:
-        lines.append("")
-        lines.append("😔 На жаль, вільних слотів не знайдено на найближчі дні.")
+        lines.append("\n😔 На жаль, вільних слотів не знайдено.")
 
     return "\n".join(lines)
 
 
 def format_schedule_short(schedule: list[DaySchedule]) -> str:
-    """
-    Короткий формат — тільки дні зі слотами.
-    """
+    """Short format for schedule."""
     return format_schedule(schedule, compact=True)
