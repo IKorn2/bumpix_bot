@@ -21,7 +21,10 @@ from aiogram.client.default import DefaultBotProperties
 
 from config import BOT_TOKEN, AUTO_CHECK_INTERVAL, NOTIFY_CHAT_IDS, DAYS_AHEAD
 from parser import fetch_schedule, format_schedule, format_schedule_short
-from database import init_db, add_subscription, remove_subscription, get_subscriptions
+from database import (
+    init_db, add_subscription, remove_subscription, get_subscriptions,
+    get_last_known_slots, update_last_known_slots
+)
 
 # ── Логування ────────────────────────────────────────────────────────────────
 
@@ -38,8 +41,7 @@ from aiogram.types import BotCommand
 
 router = Router()
 
-# Для зберігання останнього відомого стану (для авто-нотифікацій)
-_last_known_slots: dict[str, set[str]] = {}
+# (Стан тепер зберігається в БД через get_last_known_slots / update_last_known_slots)
 
 
 @router.message(Command("start"))
@@ -141,23 +143,25 @@ async def cmd_test_notify(message: types.Message):
     try:
         schedule = await fetch_schedule()
         
-        global _last_known_slots
+        last_known = get_last_known_slots()
+        current_slots: dict[str, set[str]] = {}
         new_slots_text_parts: list[str] = []
 
         for day in schedule:
             if not day.is_working or not day.slots:
                 continue
             slot_set = {s.time_str for s in day.slots}
+            current_slots[day.date_label] = slot_set
             
-            prev_set = _last_known_slots.get(day.date_label, set())
+            prev_set = last_known.get(day.date_label, set())
             new_times = slot_set - prev_set
             
             if new_times:
                 times_str = ", ".join(sorted(new_times))
                 new_slots_text_parts.append(f"🆕 <b>{day.date_label}</b>: {times_str}")
-            
-            # Оновлюємо кеш для наступної перевірки (фонової або ручної)
-            _last_known_slots[day.date_label] = slot_set
+        
+        # Оновлюємо стан у БД
+        update_last_known_slots(current_slots)
 
         if new_slots_text_parts:
             text = (
@@ -178,8 +182,6 @@ async def cmd_test_notify(message: types.Message):
 
 async def _auto_check_loop(bot: Bot):
     """Періодично перевіряє розклад і надсилає повідомлення при змінах."""
-    global _last_known_slots
-
     if AUTO_CHECK_INTERVAL <= 0:
         logger.info("Авто-перевірка вимкнена (AUTO_CHECK_INTERVAL=%s)", AUTO_CHECK_INTERVAL)
         return
@@ -204,6 +206,7 @@ async def _auto_check_loop(bot: Bot):
             continue
 
         # Визначити нові слоти
+        last_known = get_last_known_slots()
         current_slots: dict[str, set[str]] = {}
         new_slots_text_parts: list[str] = []
 
@@ -213,7 +216,7 @@ async def _auto_check_loop(bot: Bot):
             slot_set = {s.time_str for s in day.slots}
             current_slots[day.date_label] = slot_set
 
-            prev_set = _last_known_slots.get(day.date_label, set())
+            prev_set = last_known.get(day.date_label, set())
             new_times = slot_set - prev_set
             if new_times:
                 times_str = ", ".join(sorted(new_times))
@@ -221,7 +224,7 @@ async def _auto_check_loop(bot: Bot):
                     f"🆕 <b>{day.date_label}</b>: {times_str}"
                 )
 
-        _last_known_slots = current_slots
+        update_last_known_slots(current_slots)
 
         if new_slots_text_parts:
             text = (
